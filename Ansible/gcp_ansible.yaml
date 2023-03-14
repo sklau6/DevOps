@@ -1,0 +1,80 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    gcp_project_id: example-project
+    gcp_zone: us-west1-a
+    gcp_network: example-network
+    gcp_subnet: example-subnet
+    gcp_image: centos-7
+    gcp_machine_type: n1-standard-1
+    gcp_service_account: example-sa@example-project.iam.gserviceaccount.com
+    gcp_scopes: ['https://www.googleapis.com/auth/cloud-platform']
+    gcp_ssh_key: ~/.ssh/example-key
+
+  tasks:
+    # Create a GCP instance
+    - name: Create GCP instance
+      gcp_compute_instance:
+        project: "{{ gcp_project_id }}"
+        zone: "{{ gcp_zone }}"
+        name: example-instance
+        network_interfaces:
+          - network: "{{ gcp_network }}"
+            access_configs:
+              - name: External NAT
+                type: ONE_TO_ONE_NAT
+        machine_type: "{{ gcp_machine_type }}"
+        image_family: "{{ gcp_image }}"
+        service_account_email: "{{ gcp_service_account }}"
+        scopes: "{{ gcp_scopes }}"
+        metadata: '{"ssh-keys": "example-user:{{ lookup("file", gcp_ssh_key + ".pub") }}" }'
+
+    # Add the new instance to an Ansible group
+    - name: Add new instance to Ansible group
+      add_host:
+        name: "{{ item.networkInterfaces[0].accessConfigs[0].natIP }}"
+        groups: gcp
+      with_items: "{{ gcp_compute_instance.results }}"
+
+- hosts: gcp
+  remote_user: example-user
+  become: yes
+
+  tasks:
+    # Install packages
+    - name: Install packages
+      yum:
+        name: ["httpd", "php"]
+        state: latest
+
+    # Configure Apache
+    - name: Configure Apache
+      template:
+        src: templates/httpd.conf.j2
+        dest: /etc/httpd/conf/httpd.conf
+        owner: root
+        group: root
+        mode: 0644
+      notify:
+        - Restart Apache
+
+    # Configure PHP
+    - name: Configure PHP
+      template:
+        src: templates/php.ini.j2
+        dest: /etc/php.ini
+        owner: root
+        group: root
+        mode: 0644
+      notify:
+        - Restart Apache
+
+  handlers:
+    # Restart Apache
+    - name: Restart Apache
+      service:
+        name: httpd
+        state: restarted

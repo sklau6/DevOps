@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: example-namespace
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: example-sa
+  namespace: example-namespace
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: example-secret
+  namespace: example-namespace
+type: Opaque
+data:
+  username: base64-encoded-username
+  password: base64-encoded-password
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-config
+  namespace: example-namespace
+data:
+  example.property: example-value
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-app
+  namespace: example-namespace
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: example-app
+  template:
+    metadata:
+      labels:
+        app: example-app
+    spec:
+      serviceAccountName: example-sa
+      containers:
+        - name: example-container
+          image: example-image:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: EXAMPLE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: example-secret
+                  key: username
+            - name: EXAMPLE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: example-secret
+                  key: password
+            - name: EXAMPLE_CONFIG_PROPERTY
+              valueFrom:
+                configMapKeyRef:
+                  name: example-config
+                  key: example.property
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-service
+  namespace: example-namespace
+spec:
+  selector:
+    app: example-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: LoadBalancer

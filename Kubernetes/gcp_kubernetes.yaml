@@ -1,0 +1,168 @@
+# Configure the GCP provider
+provider "google" {
+  project = "example-project"
+  region = "us-west1"
+}
+
+# Create a GKE cluster
+resource "google_container_cluster" "example" {
+  name     = "example-gke-cluster"
+  location = "us-west1"
+  network  = "default"
+  subnetwork = "default"
+  initial_node_count = 3
+
+  master_auth {
+    username = "admin"
+    password = "password"
+  }
+
+  node_config {
+    preemptible = true
+    machine_type = "n1-standard-2"
+    disk_size_gb = 20
+  }
+
+  tags = ["example"]
+
+  depends_on = [
+    google_compute_network.default,
+    google_compute_subnetwork.default,
+  ]
+}
+
+# Configure kubectl
+data "google_container_cluster" "example" {
+  name = google_container_cluster.example.name
+}
+
+provider "kubernetes" {
+  host                   = data.google_container_cluster.example.endpoint
+  cluster_ca_certificate = base64decode(data.google_container_cluster.example.master_auth.0.cluster_ca_certificate)
+  token                  = data.google_container_cluster.example.master_auth.0.access_token
+  load_config_file       = false
+}
+
+# Create a Kubernetes namespace
+resource "kubernetes_namespace" "example" {
+  metadata {
+    name = "example"
+  }
+}
+
+# Create a Kubernetes deployment
+resource "kubernetes_deployment" "example" {
+  metadata {
+    name = "example"
+    namespace = kubernetes_namespace.example.metadata.0.name
+  }
+
+  spec {
+    replicas = 3
+
+    selector {
+      match_labels = {
+        app = "example"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app = "example"
+        }
+      }
+
+      spec {
+        container {
+          image = "nginx:latest"
+          name = "nginx"
+          ports {
+            container_port = 80
+          }
+        }
+      }
+    }
+  }
+}
+
+# Create a Kubernetes service to expose the deployment
+resource "kubernetes_service" "example" {
+  metadata {
+    name = "example"
+    namespace = kubernetes_namespace.example.metadata.0.name
+  }
+
+  spec {
+    selector = {
+      app = "example"
+    }
+
+    port {
+      name       = "http"
+      port       = 80
+      target_port = 80
+    }
+
+    type = "LoadBalancer"
+  }
+}
+
+# Create a GCP firewall rule to allow incoming traffic
+resource "google_compute_firewall" "example" {
+  name = "example-fw-rule"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports = ["80"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags = ["example"]
+}
+
+# Create a GCP load balancer to route traffic to the Kubernetes service
+resource "google_compute_global_address" "example" {
+  name = "example-lb-ip"
+}
+
+resource "google_compute_health_check" "example" {
+  name = "example-health-check"
+  check_interval_sec = 30
+  timeout_sec = 5
+  tcp_health_check {
+    port = 80
+  }
+}
+
+resource "google_compute_backend_service" "example" {
+  name = "example-backend-service"
+  protocol = "HTTP"
+  timeout_sec = 10
+
+  backend {
+    group = google_container_cluster.example.instance_group_urls[0]
+    balancing_mode = "UTILIZATION"
+    max_utilization = 0.8
+  }
+
+  health_checks = [google_compute_health_check.example.self_link]
+
+  depends_on = [google_container_cluster.example,
+  ]
+}
+
+resource "google_compute_forwarding_rule" "example" {
+  name = "example-forwarding-rule"
+  load_balancing_scheme = "EXTERNAL"
+  ip_address = google_compute_global_address.example.address
+  port_range = "80"
+  target = google_compute_backend_service.example.self_link
+
+  depends_on = [
+  google_compute_global_address.example,
+  google_compute_health_check.example,
+  google_compute_backend_service.example,
+  ]
+}

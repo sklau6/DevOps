@@ -1,0 +1,70 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    azure_resource_group: example-rg
+    azure_location: westus2
+    azure_vm_name: example-vm
+    azure_image: CentOS
+    azure_size: Standard_B1ms
+    azure_admin_username: example-user
+    azure_admin_password: example-password
+    azure_ssh_key: ~/.ssh/example-key.pub
+
+  tasks:
+    # Create an Azure virtual machine
+    - name: Create Azure virtual machine
+      azure_rm_virtualmachine:
+        resource_group: "{{ azure_resource_group }}"
+        location: "{{ azure_location }}"
+        name: "{{ azure_vm_name }}"
+        admin_username: "{{ azure_admin_username }}"
+        admin_password: "{{ azure_admin_password }}"
+        vm_size: "{{ azure_size }}"
+        image:
+          offer: CentOS
+          publisher: OpenLogic
+          sku: '7.6'
+        os_disk:
+          name: "{{ azure_vm_name }}_os_disk"
+          caching: ReadWrite
+          create_option: fromImage
+        data_disks:
+          - name: "{{ azure_vm_name }}_data_disk"
+            create_option: empty
+            disk_size_gb: 50
+        network_interfaces:
+          - name: "{{ azure_vm_name }}_nic"
+            ip_configurations:
+              - name: "{{ azure_vm_name }}_ip"
+                subnet:
+                  name: default
+                public_ip_address: "{{ azure_vm_name }}-public-ip"
+        ssh_key: "{{ lookup('file', azure_ssh_key) }}"
+
+    # Add the new instance to an Ansible group
+    - name: Add new instance to Ansible group
+      add_host:
+        name: "{{ azure_vm_name }}.{{ azure_location }}.cloudapp.azure.com"
+        groups: azure
+
+- hosts: azure
+  remote_user: "{{ azure_admin_username }}"
+  become: yes
+
+  tasks:
+    # Install packages
+    - name: Install packages
+      yum:
+        name: ["httpd", "php"]
+        state: latest
+
+    # Configure Apache
+    - name: Configure Apache
+      template:
+        src: templates/httpd.conf.j2
+        dest: /etc/httpd/conf/httpd.conf
+        owner: root
+        group:

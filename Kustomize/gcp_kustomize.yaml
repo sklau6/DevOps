@@ -1,0 +1,50 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- namespace.yaml
+- service-account.yaml
+- secret.yaml
+- config-map.yaml
+- deployment.yaml
+- service.yaml
+
+namespace:
+  name: example-namespace
+
+secretGenerator:
+- name: example-secret
+  type: Opaque
+  behavior: replace
+  data:
+    username: base64-encoded-username
+    password: base64-encoded-password
+
+configMapGenerator:
+- name: example-config
+  behavior: replace
+  literals:
+    - example.property=example-value
+
+images:
+- name: example-image
+  newTag: latest
+
+configurations:
+- config.yaml
+
+vars:
+- name: IMAGE_TAG
+  objref:
+    kind: Image
+    name: example-image
+    apiVersion: v1
+  fieldref:
+    fieldpath: tag
+
+patches:
+- patch.yaml
+
+patchesStrategicMerge:
+- deployment-patch.yaml
+

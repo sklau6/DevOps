@@ -1,0 +1,163 @@
+# Configure the AWS provider
+provider "aws" {
+  region = "us-west-2"
+}
+
+# Create an EKS cluster
+module "eks" {
+  source = "terraform-aws-modules/eks/aws"
+
+  cluster_name = "example-eks-cluster"
+  subnets = [
+    aws_subnet.private[0].id,
+    aws_subnet.private[1].id,
+    aws_subnet.private[2].id,
+  ]
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Terraform = "true"
+    Environment = "dev"
+  }
+}
+
+# Configure kubectl
+data "aws_eks_cluster_auth" "example" {
+  name = module.eks.cluster_id
+}
+
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)
+  token                  = data.aws_eks_cluster_auth.example.token
+  load_config_file       = false
+}
+
+# Create a Kubernetes namespace
+resource "kubernetes_namespace" "example" {
+  metadata {
+    name = "example"
+  }
+}
+
+# Create a Kubernetes deployment
+resource "kubernetes_deployment" "example" {
+  metadata {
+    name = "example"
+    namespace = kubernetes_namespace.example.metadata.0.name
+  }
+
+  spec {
+    replicas = 3
+
+    selector {
+      match_labels = {
+        app = "example"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app = "example"
+        }
+      }
+
+      spec {
+        container {
+          image = "nginx:latest"
+          name = "nginx"
+          ports {
+            container_port = 80
+          }
+        }
+      }
+    }
+  }
+}
+
+# Create a Kubernetes service to expose the deployment
+resource "kubernetes_service" "example" {
+  metadata {
+    name = "example"
+    namespace = kubernetes_namespace.example.metadata.0.name
+  }
+
+  spec {
+    selector = {
+      app = "example"
+    }
+
+    port {
+      name       = "http"
+      port       = 80
+      target_port = 80
+    }
+
+    type = "LoadBalancer"
+  }
+}
+
+# Create an AWS security group to allow incoming traffic
+resource "aws_security_group" "example" {
+  name_prefix = "example-sg"
+
+  ingress {
+    from_port = 80
+    to_port = 80
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Terraform = "true"
+    Environment = "dev"
+  }
+}
+
+# Create an AWS load balancer to route traffic to the Kubernetes service
+resource "aws_lb" "example" {
+  name = "example-lb"
+  internal = false
+  load_balancer_type = "application"
+  security_groups = [aws_security_group.example.id]
+  subnets = [
+    aws_subnet.public[0].id,
+    aws_subnet.public[1].id,
+    aws_subnet.public[2].id,
+  ]
+
+  depends_on = [
+    kubernetes_service.example,
+  ]
+}
+
+# Create an AWS load balancer target group to route traffic to the Kubernetes service
+resource "aws_lb_target_group" "example" {
+  name_prefix = "example-tg"
+  port = 80
+  protocol = "HTTP"
+  vpc_id = aws_vpc.main.id
+  target_type = "ip"
+
+  health_check {
+    interval = 30
+    timeout = 10
+    path = "/health"
+    port = "80"
+  }
+
+  depends_on = [
+    dynamic "target" {
+    for_each = kubernetes_service.example.spec.0.ports
+
+    content {
+        target_id = kubernetes_service.example.spec.0.cluster_ip
+        target_port = target.value.target_port
+    }
+  }
+
+  depends_on = [
+    kubernetes_service.example,
+  ]
+}
